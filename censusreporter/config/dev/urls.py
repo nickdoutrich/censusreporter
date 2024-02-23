@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.conf.urls import url, include
+from django.urls import re_path
 from censusreporter.config.base.urls import urlpatterns, handler500
 
 if settings.DEBUG:
@@ -18,10 +18,10 @@ if settings.DEBUG:
             raise Http404("'%s' could not be found" % path)
         return static.serve(request, path, document_root=STATIC_SITEMAP_DIR, **kwargs)
 
-    urlpatterns += [
-        url(
-            regex   = '^(?P<path>sitemap.*\.xml)$',
-            view    = dev_sitemap_serve,
-            name    = 'sitemaps',
-        )
-    ]
+urlpatterns += [
+    re_path(
+        r'^(?P<path>sitemap.*\.xml)$',
+        dev_sitemap_serve,
+        name='sitemaps',
+    ),
+]

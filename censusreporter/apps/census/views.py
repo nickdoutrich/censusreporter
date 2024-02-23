@@ -28,17 +28,14 @@ from .utils import (
 from .profile import geo_profile, enhance_api_data
 from .topics import TOPICS_MAP, TOPIC_GROUP_LABELS, sort_topics
 
-from boto.s3.connection import S3Connection, OrdinaryCallingFormat
-from boto.s3.key import Key
-
-
+import boto3
 import logging
+
 logging.basicConfig()
 logger = logging.getLogger(__name__)
 
 r_session = requests.Session()
 r_session.headers.update({'User-Agent': 'censusreporter.org frontend'})
-
 
 # UTILS
 
@@ -49,10 +46,8 @@ def render_json_to_response(context):
     result = json.dumps(context, sort_keys=False, indent=4)
     return HttpResponse(result, content_type='application/javascript')
 
-
 def capitalize_first(str):
     """Capitalizes only the first letter of the given string.
-
     :param str: string to capitalize
     :return: str with only the first letter capitalized
     """
@@ -62,10 +57,8 @@ def capitalize_first(str):
 
 # HEALTH CHECK
 
-
 class HealthcheckView(TemplateView):
     template_name = 'healthcheck.html'
-
 
 # ERRORS
 
@@ -74,13 +67,11 @@ def server_error(request):
     response.status_code = 500
     return response
 
-
 def raise_404_with_messages(request, error_data={}):
     ''' expects a dict containing error labels and messages for the user '''
     for k, v in error_data.items():
         error_text = '<strong>%s:</strong> %s' % (k.title(), v)
         messages.error(request, error_text)
-
     raise Http404
 
 
@@ -326,14 +317,16 @@ class GeographyDetailView(TemplateView):
         pass
 
     def get_geography(self, geo_id):
-        endpoint = f"{settings.API_URL}/1.0/geo/tiger2022/{self.geo_id}"
-        r = r_session.get(endpoint)
-        status_code = r.status_code
-
-        if status_code == 200:
-            geo_data = r.json(object_pairs_hook=OrderedDict)
+        endpoint = f"{settings.API_URL}/1.0/geo/tiger2022/{geo_id}"
+        r = requests.get(endpoint)
+        logger.debug(f"Requesting data for geo_id {geo_id}: {endpoint}")
+        logger.debug(f"Response status code: {r.status_code}")
+        if r.status_code == 200:
+            geo_data = r.json()  # Example of processing the successful response
             return geo_data
-        return None
+        else:
+            logger.error(f"Failed to retrieve data: {r.text}")
+            return None  # Or handle the failure appropriately
 
     def get_context_data(self, *args, **kwargs):
         geography_id = self.geo_id
@@ -471,40 +464,28 @@ class ComparisonBuilder(TemplateView):
 
 
 class S3Conn(object):
-    def make_s3(self):
-        if settings.AWS_ACCESS_KEY_ID and settings.AWS_SECRET_ACCESS_KEY:
-            s3 = S3Connection(settings.AWS_ACCESS_KEY_ID,
-                              settings.AWS_SECRET_ACCESS_KEY,
-                              calling_format=OrdinaryCallingFormat())
-        else:
-            try:
-                s3 = S3Connection(calling_format=OrdinaryCallingFormat())
-            except Exception:
-                s3 = None
-        return s3
+    def __init__(self):
+        # Initialize a boto3 S3 resource with your AWS credentials
+        self.s3_resource = boto3.resource(
+            's3',
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name='us-east-1'  # Example region, adjust as necessary
+        )
 
-    def s3_key(self, key_name):
-        s3 = self.make_s3()
+    def write_json(self, bucket_name, key_name, data):
+        # Convert the data to a gzipped byte stream
+        gzipped_data = io.BytesIO()
+        with gzip.GzipFile(fileobj=gzipped_data, mode='w') as gz_file:
+            gz_file.write(data.encode('utf-8'))
+        gzipped_data.seek(0)
 
-        key = None
-        if s3:
-            bucket = s3.get_bucket('embed.censusreporter.org')
-            key = Key(bucket, key_name)
-        return key
-
-    def write_json(self, s3_key, data):
-        s3_key.metadata['Content-Type'] = 'application/json'
-        s3_key.metadata['Content-Encoding'] = 'gzip'
-        s3_key.storage_class = 'STANDARD'
-
-        # create gzipped version of json in memory
-        memfile = io.BytesIO()
-        with gzip.GzipFile(filename=s3_key.key, mode='wb', fileobj=memfile) as gzip_data:
-            gzip_data.write(data.encode('utf-8'))
-        memfile.seek(0)
-
-        # store static version on S3
-        s3_key.set_contents_from_file(memfile)
+        # Write the gzipped data to S3
+        self.s3_resource.Object(bucket_name, key_name).put(
+            Body=gzipped_data.getvalue(),
+            ContentEncoding='gzip',
+            ContentType='application/json'
+        )
 
 
 class MakeJSONView(View):
@@ -775,4 +756,4 @@ crawl-delay: 3
 
 Sitemap: https://censusreporter.org/static/sitemap/sitemap.xml
 """
-    return HttpResponse(robots_txt,content_type="text/plain")
+    return HttpResponse(robots_txt, content_type="text/plain")
